@@ -373,6 +373,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[dict[str, Any], list[
     failures = [result for result in results if not result.success]
     prompt_tokens = sum(result.prompt_tokens for result in successes)
     completion_tokens = sum(result.completion_tokens for result in successes)
+    total_tokens = prompt_tokens + completion_tokens
     latencies = [result.elapsed_seconds for result in successes]
     ttfts = [result.ttft_seconds for result in successes if result.ttft_seconds is not None]
     generation_rates = [
@@ -400,7 +401,9 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[dict[str, Any], list[
         "wall_seconds": wall_seconds,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
         "tokens_estimated": any(result.tokens_estimated for result in successes),
+        "total_tokens_per_second": total_tokens / wall_seconds if wall_seconds else 0.0,
         "completion_tokens_per_second": completion_tokens / wall_seconds if wall_seconds else 0.0,
         "successful_requests_per_second": len(successes) / wall_seconds if wall_seconds else 0.0,
         "latency_seconds": {
@@ -450,6 +453,11 @@ def print_report(report: dict[str, Any]) -> None:
     print(f"Wall time: {report['wall_seconds']:.3f}s")
     print(f"Prompt tokens: {report['prompt_tokens']}")
     print(f"Completion tokens: {report['completion_tokens']}{estimated}")
+    print(f"Total tokens: {report['total_tokens']}{estimated}")
+    print(
+        "Aggregate total token throughput: "
+        f"{report['total_tokens_per_second']:.2f} tokens/sec"
+    )
     print(
         "Aggregate completion throughput: "
         f"{report['completion_tokens_per_second']:.2f} tokens/sec"

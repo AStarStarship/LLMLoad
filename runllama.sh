@@ -14,6 +14,7 @@ Usage:
   ./runllama.sh INSPECT <port>
   ./runllama.sh KILL <port|ALL>
   ./runllama.sh CLEAN <backend|ALL>
+  ./runllama.sh CLONE
 
 Backends:
   VULKAN | SYCL | ROCM | CUDA | HYBRID | CPU | NONE
@@ -94,17 +95,33 @@ build_backend() {
   local build_dir
   build_dir="$(backend_build_dir "$backend")" || die "unknown backend: $backend"
   local build_path="$LLAMA_ROOT/$build_dir"
+  
+  # Core optimization flags applied to all builds
   local cmake_args=(
     -S "$LLAMA_ROOT"
     -B "$build_path"
     -DCMAKE_BUILD_TYPE=Release
-    -DGGML_NATIVE=ON
+    -DCMAKE_C_FLAGS="-march=native -O3 -Wno-error"
+    -DCMAKE_CXX_FLAGS="-march=native -O3 -Wno-error"
   )
 
+  # Route specific hardware acceleration variables explicitly
   case "$backend" in
-    CPU|NONE) ;;
+    CPU|NONE) 
+      cmake_args+=( -DGGML_NATIVE=ON )
+      ;;
     SYCL)
-      cmake_args+=( -DGGML_SYCL=ON -DGGML_SYCL_F16=ON -DGGML_SYCL_DNN=ON )
+      echo "source /opt/intel/oneapi/setvars.sh --force > /dev/null 2>&1" >> ~/.bashrc
+      echo "export ZES_ENABLE_SYSMAN=1" >> ~/.bashrc
+      source ~/.bashrc
+      cmake_args+=(
+        -DCMAKE_C_COMPILER=icx
+        -DCMAKE_CXX_COMPILER=icpx
+        -DGGML_SYCL=ON
+        -DGGML_SYCL_F16=ON
+        -DGGML_SYCL_DNN=ON
+        -DGGML_SYCL_TARGET=INTEL
+      )
       ;;
     ROCM)
       cmake_args+=( -DGGML_HIP=ON )
@@ -116,13 +133,18 @@ build_backend() {
       cmake_args+=( -DGGML_VULKAN=ON )
       ;;
     HYBRID)
+      # Combines split-workloads across engines if supported by your setup
       cmake_args+=( -DGGML_VULKAN=ON -DGGML_CUDA=ON )
       ;;
   esac
 
   echo "Configuring $backend in $build_path"
+  
+  # Ensure the old build artifacts are cleared so CMake recalculates hardware backends 
+  rm -rf "$build_path"
+  
   cmake "${cmake_args[@]}"
-  cmake --build "$build_path" --config Release --target llama-server llama-bench -j "$(nproc)"
+  cmake --build "$build_path" --config Release --target llama-server llama-bench -j 2
 }
 
 update_source() {
@@ -145,9 +167,14 @@ clean_backend() {
   rm -rf -- "$LLAMA_ROOT/$build_dir"
 }
 
+clone() {
+  cd ~/
+  git clone https://github.com/ggml-org/llama.cpp
+}
+
 inspect_log() {
   local port="$1"
-  is_uint "$port" || die "INSPECT requires a numeric port"
+  is_uint "$port" || die "INSPECT requires a unsigned integer port"
   local log_file="${LLAMA_LOG_FILE:-/tmp/llama-$port.log}"
   [[ -f "$log_file" ]] || die "log file not found: $log_file"
   grep -Ei "offload|buffer|device|vram|memory|cpu|gpu|tensor|layer|slot|context|eval time|token" "$log_file" || true
@@ -216,6 +243,10 @@ case "${1^^}" in
     (($# == 2)) || die "usage: ./runllama.sh CLEAN <backend|ALL>"
     clean_backend "$2"
     exit 0
+    ;;
+  ClONE)
+    (($# == 2)) || die "usage: ./runllama.sh CLONE"
+    clone
     ;;
   HELP|-H|--HELP)
     usage
@@ -332,20 +363,30 @@ case "$MODEL_SEL" in
   12b)
     MODEL="$MODEL_BASE/unsloth/gemma-4-12B-it-qat-GGUF/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
     K_CACHE="q8_0"
-    CUSTOM_FLAGS+=( --jinja )
+    CUSTOM_FLAGS+=(
+        --jinja
+    )
     ;;
   26b)
     MODEL="$MODEL_BASE/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
-    CUSTOM_FLAGS+=( --jinja --n-cpu-moe 0 )
+    CUSTOM_FLAGS+=(
+        --jinja
+        --n-cpu-moe 0
+    )
     ;;
   27b)
     MODEL="$MODEL_BASE/unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-UD-Q4_K_XL.gguf"
-    CUSTOM_FLAGS+=( --jinja --n-cpu-moe 0 )
+    CUSTOM_FLAGS+=(
+      --jinja
+      --chat-template-kwargs '{"preserve_thinking": true}'
+      --n-cpu-moe 0
+    )
     ;;
   27bmtp)
     MODEL="$MODEL_BASE/unsloth/Qwen3.6-27B-MTP-GGUF/Qwen3.6-27B-UD-Q4_K_XL.gguf"
     CUSTOM_FLAGS+=(
       --jinja
+      --chat-template-kwargs '{"preserve_thinking": true}'
       --n-cpu-moe 0
       --spec-type draft-mtp
       --spec-draft-n-max "${LLAMA_SPEC_DRAFT_N_MAX:-2}"
@@ -354,7 +395,17 @@ case "$MODEL_SEL" in
     ;;
   35b)
     MODEL="$MODEL_BASE/unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
-    CUSTOM_FLAGS+=( --jinja --n-cpu-moe 0 )
+    CUSTOM_FLAGS+=(
+      --jinja
+      --chat-template-kwargs '{"preserve_thinking": true}'
+      -ngl 999
+      #--flash-attn on
+      #--chat-template raw
+      #--no-mmap
+      #--spec-draft-n-max 0
+      #-fa on
+      #--n-cpu-moe 0
+    )
     ;;
   35bmtp)
     MODEL="$MODEL_BASE/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
@@ -408,6 +459,21 @@ PID_FILE="${XDG_RUNTIME_DIR:-/tmp}/runllama-$PORT.pid"
 if [[ -z "${LLAMA_API_KEY:-}" && "$HOST" != "127.0.0.1" && "$HOST" != "localhost" && "$HOST" != "::1" ]]; then
   echo "Warning: server is listening beyond localhost without LLAMA_API_KEY." >&2
 fi
+case "${2^^}" in
+  CPU|NONE)
+    ;;
+  SYCL)
+    export ZES_ENABLE_SYSMAN=1
+    ;;
+  ROCM)
+    ;;
+  CUDA)
+    ;;
+  VULKAN)
+    ;;
+  HYBRID)
+    ;;
+esac
 
 echo "Launching $LLAMA_BIN"
 echo "  llama.cpp revision: $LLAMA_VERSION"
