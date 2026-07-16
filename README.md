@@ -12,6 +12,9 @@ chmod +x ./runllama.sh ./llmload.py
 ./runllama.sh UPDATE
 ./runllama.sh BUILD VULKAN
 ./runllama.sh LS VULKAN
+
+ LLAMA_API_KEY='your_api_key' ./runllama.sh 9000 SYCL 1 35b 512 4 auto
+LLAMA_API_KEY='your_api_key' ./llmload.py 192.168.0.123:9000 --concurrency 4 --requests 4 --warmup 0 --max-tokens 1024
 ```
 
 `UPDATE` uses a fast-forward-only pull, so it will not overwrite divergent or
