@@ -515,8 +515,6 @@ exec "$LLAMA_BIN" \
   --dry-penalty-last-n "${LLAMA_DRY_LAST_N:-4096}" \
   --samplers "penalties;dry;min_p;temperature" \
   --flash-attn "${LLAMA_FLASH_ATTN:-on}" \
-  --reasoning off \
-  --reasoning-format none \
   --log-file "$LOG_FILE" \
   --cont-batching \
   "${CUSTOM_FLAGS[@]}"
