@@ -75,13 +75,17 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_group = parser.add_mutually_exclusive_group()
     prompt_group.add_argument("--prompt", default=DEFAULT_PROMPT, help="benchmark prompt")
     prompt_group.add_argument("--prompt-file", type=Path, help="UTF-8 file containing the prompt")
-    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        help="override the server's configured sampling temperature",
+    )
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
         "--ignore-eos",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="request exactly max-tokens from llama.cpp unless an error occurs",
+        default=False,
+        help="continue generating through EOS until max-tokens",
     )
     parser.add_argument(
         "--stream",
@@ -151,7 +155,7 @@ def resolve_arguments(args: argparse.Namespace) -> argparse.Namespace:
         raise ValueError("warmup cannot be negative")
     if args.timeout <= 0 or args.connect_timeout <= 0:
         raise ValueError("timeouts must be greater than zero")
-    if args.temperature < 0:
+    if args.temperature is not None and args.temperature < 0:
         raise ValueError("temperature cannot be negative")
     if args.requests is None and args.duration is None:
         args.requests = max(10, args.concurrency * 4)
@@ -269,6 +273,33 @@ async def execute_request(
                 if not encoded or encoded == "[DONE]":
                     continue
                 event = json.loads(encoded)
+                stream_error = event.get("error")
+                if stream_error is not None:
+                    if isinstance(stream_error, dict):
+                        message = str(stream_error.get("message") or stream_error)
+                        code = stream_error.get("code")
+                        error = (
+                            f"stream error {code}: {message}"
+                            if code is not None
+                            else f"stream error: {message}"
+                        )
+                    else:
+                        error = f"stream error: {stream_error}"
+                    elapsed = time.perf_counter() - started
+                    estimated = completion_tokens is None
+                    if completion_tokens is None:
+                        completion_tokens = token_events
+                    ttft = first_token_at - started if first_token_at is not None else None
+                    return RequestResult(
+                        False,
+                        response.status,
+                        prompt_tokens,
+                        completion_tokens,
+                        estimated,
+                        elapsed,
+                        ttft,
+                        error,
+                    )
                 usage = event.get("usage") or {}
                 if usage:
                     prompt_tokens = int(usage.get("prompt_tokens", prompt_tokens) or 0)
@@ -332,10 +363,11 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[dict[str, Any], list[
             "model": model,
             "messages": [{"role": "user", "content": args.prompt}],
             "max_tokens": args.max_tokens,
-            "temperature": args.temperature,
             "seed": args.seed,
             "stream": args.stream,
         }
+        if args.temperature is not None:
+            payload["temperature"] = args.temperature
         if args.ignore_eos:
             payload["ignore_eos"] = True
         if args.stream:
@@ -390,6 +422,7 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[dict[str, Any], list[
         "model": model,
         "concurrency": args.concurrency,
         "max_tokens_per_request": args.max_tokens,
+        "temperature_override": args.temperature,
         "streaming": args.stream,
         "ignore_eos": args.ignore_eos,
         "warmup_requests": args.warmup,
@@ -440,10 +473,18 @@ def print_report(report: dict[str, Any]) -> None:
         if report["requested_requests"] is not None
         else f"{report['requested_duration_seconds']} seconds"
     )
+    temperature = (
+        "server default"
+        if report["temperature_override"] is None
+        else str(report["temperature_override"])
+    )
     print("\n=== llama.cpp Load Benchmark ===")
     print(f"Endpoint: {report['endpoint']}")
     print(f"Model: {report['model']}")
     print(f"Mode: {mode}; concurrency={report['concurrency']}; warmup={report['warmup_requests']}")
+    print(
+        f"Request sampling: temperature={temperature}; ignore_eos={report['ignore_eos']}"
+    )
     print(
         "Requests: "
         f"{report['attempted_requests']} attempted, "

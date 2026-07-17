@@ -72,6 +72,31 @@ LLAMA_HOST=0.0.0.0 LLAMA_API_KEY='replace-me' \
 `LLAMA_API_KEY` is consumed by llama-server through its supported environment
 variable, so the secret is not copied onto the process command line.
 
+Qwen 3.6 profiles default to their recommended sampling values: temperature
+0.6, top-k 20, top-p 0.95, and min-p 0. The `LLAMA_TEMP`, `LLAMA_TOP_K`,
+`LLAMA_TOP_P`, and `LLAMA_MIN_P` environment variables override them. The
+launcher leaves llama.cpp's complete default sampler chain enabled.
+
+For raw throughput tests that do not need parsed reasoning or tool calls, the
+PEG-native response parser can be disabled explicitly:
+
+```bash
+LLAMA_SKIP_CHAT_PARSING=1 ./runllama.sh 9000 VULKAN 0,1 35b 512 1 262144 8 layer 1,1
+```
+
+This returns reasoning and tool syntax as ordinary response content. Do not use
+it for clients that require structured `reasoning_content` or tool calls.
+
+The load client respects EOS and inherits the server's temperature by default,
+so these Qwen profile settings are not silently replaced with greedy sampling.
+Use `--temperature` only when an explicit request override is desired. For a
+fixed-length raw throughput run, combine the server mode above with an explicit
+client opt-in:
+
+```bash
+./llmload.py 127.0.0.1:9000 --max-tokens 4096 --ignore-eos
+```
+
 ## Diagnose and stop
 
 ```bash
@@ -121,7 +146,8 @@ LLAMA_API_KEY='replace-me' ./llmload.py 192.168.0.24:9000 \
 
 The benchmark performs an unmeasured warm-up, discovers the loaded model from
 `/v1/models`, streams by default to report time to first token, and exits with a
-nonzero status if any measured request fails. Use `--help` for prompt, model,
+nonzero status if any measured request fails, including an error delivered
+inside an HTTP 200 server-sent event stream. Use `--help` for prompt, model,
 timeout, EOS, streaming, and other controls.
 
 ## License

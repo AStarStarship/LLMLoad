@@ -42,6 +42,11 @@ Useful environment variables:
   LLAMA_CACHE_K=f16             Override K-cache type.
   LLAMA_CACHE_V=q8_0            Override V-cache type.
   LLAMA_FLASH_ATTN=on           Set flash attention to on, off, or auto.
+  LLAMA_TEMP=...                Override the model profile's temperature.
+  LLAMA_TOP_K=...               Override the model profile's top-k value.
+  LLAMA_TOP_P=...               Override the model profile's top-p value.
+  LLAMA_MIN_P=...               Override the model profile's min-p value.
+  LLAMA_SKIP_CHAT_PARSING=1     Return raw content without PEG parsing.
   LLAMA_DRY_MULTIPLIER=0        Enable DRY explicitly if desired.
   LLAMA_DRY_LAST_N=4096         Bound DRY work; never defaults to full context.
   LLAMA_MODEL=/path/model.gguf  Override the selected profile's model file.
@@ -291,6 +296,16 @@ require_binary "$LLAMA_BIN"
 CUSTOM_FLAGS=()
 DEVICE_ARGS=()
 THREAD_ARGS=()
+CHAT_PARSER_MODE="structured"
+
+case "${LLAMA_SKIP_CHAT_PARSING:-0}" in
+  0|false|off) ;;
+  1|true|on)
+    CUSTOM_FLAGS+=( --skip-chat-parsing )
+    CHAT_PARSER_MODE="content-only"
+    ;;
+  *) die "LLAMA_SKIP_CHAT_PARSING must be 0/1, false/true, or off/on" ;;
+esac
 
 if [[ "$TARGET" == "SYCL" && -f /opt/intel/oneapi/setvars.sh ]]; then
   set +eu
@@ -358,6 +373,10 @@ fi
 K_CACHE="f16"
 V_CACHE="q8_0"
 MODEL=""
+TEMP_DEFAULT="0.85"
+TOP_K_DEFAULT="40"
+TOP_P_DEFAULT="0.95"
+MIN_P_DEFAULT="0.05"
 
 case "$MODEL_SEL" in
   12b)
@@ -418,6 +437,15 @@ case "$MODEL_SEL" in
     )
     ;;
   *) die "unknown model profile: $MODEL_SEL" ;;
+esac
+
+case "$MODEL_SEL" in
+  27b|27bmtp|35b|35bmtp)
+    TEMP_DEFAULT="0.6"
+    TOP_K_DEFAULT="20"
+    TOP_P_DEFAULT="0.95"
+    MIN_P_DEFAULT="0.0"
+    ;;
 esac
 
 MODEL="${LLAMA_MODEL:-$MODEL}"
@@ -490,6 +518,8 @@ else
   echo "  Context: $CTX_TOTAL total ($CONTEXT_PER_SLOT per slot)"
 fi
 echo "  KV cache: K=$K_CACHE V=$V_CACHE"
+echo "  Sampling: temp=${LLAMA_TEMP:-$TEMP_DEFAULT} top-k=${LLAMA_TOP_K:-$TOP_K_DEFAULT} top-p=${LLAMA_TOP_P:-$TOP_P_DEFAULT} min-p=${LLAMA_MIN_P:-$MIN_P_DEFAULT}"
+echo "  Chat parser: $CHAT_PARSER_MODE"
 echo "  Fit: $FIT_MODE"
 echo "  Log: $LOG_FILE"
 
@@ -506,14 +536,15 @@ exec "$LLAMA_BIN" \
   --batch-size "$BATCH" \
   --ubatch-size "$UBATCH" \
   "${THREAD_ARGS[@]}" \
-  --temp "${LLAMA_TEMP:-0.85}" \
-  --min-p "${LLAMA_MIN_P:-0.05}" \
+  --temp "${LLAMA_TEMP:-$TEMP_DEFAULT}" \
+  --top-k "${LLAMA_TOP_K:-$TOP_K_DEFAULT}" \
+  --top-p "${LLAMA_TOP_P:-$TOP_P_DEFAULT}" \
+  --min-p "${LLAMA_MIN_P:-$MIN_P_DEFAULT}" \
   --presence-penalty "${LLAMA_PRESENCE_PENALTY:-0.0}" \
   --dry-multiplier "${LLAMA_DRY_MULTIPLIER:-0.0}" \
   --dry-base "${LLAMA_DRY_BASE:-1.75}" \
   --dry-allowed-length "${LLAMA_DRY_ALLOWED_LENGTH:-2}" \
   --dry-penalty-last-n "${LLAMA_DRY_LAST_N:-4096}" \
-  --samplers "penalties;dry;min_p;temperature" \
   --flash-attn "${LLAMA_FLASH_ATTN:-on}" \
   --log-file "$LOG_FILE" \
   --cont-batching \
