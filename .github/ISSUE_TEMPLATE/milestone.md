@@ -5,7 +5,7 @@ title: ''
 labels: ''
 assignees: ''
 ---
-<https://github.com/AStarStarship/Crabs/milestone/N>
+<https://github.com/AStarStarship/LLMLoad/milestone/N>
 
 ## Todo
 
